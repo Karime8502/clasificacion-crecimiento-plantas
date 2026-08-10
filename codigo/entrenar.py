@@ -1,10 +1,10 @@
 """
 entrenar.py
 -----------
-Entrena el modelo indicado (CNN desde cero o MobileNetV2) y guarda:
+Entrena el modelo indicado (CNN desde cero o MobileNetV2) para DETECCIÓN DE OBJETOS y guarda:
   - el modelo entrenado (.keras)
-  - las curvas de accuracy y loss (resultados/accuracy.png, loss.png)
-  - el historial de entrenamiento en formato .json (para el informe)
+  - las curvas de accuracy (clasificación) y loss (total) en resultados/
+  - el historial de entrenamiento en formato .json
 
 Uso:
     python entrenar.py --modelo cnn
@@ -27,22 +27,28 @@ from modelo_mobilenet import crear_mobilenet
 def graficar_historial(historial, nombre_modelo, carpeta_salida="resultados"):
     os.makedirs(carpeta_salida, exist_ok=True)
 
-    # --- Accuracy ---
+    # En detección multi-salida, Keras nombra las métricas combinando 
+    # el nombre de la capa de salida. Buscamos las llaves dinámicamente.
+    keys = historial.history.keys()
+    acc_key = [k for k in keys if "accuracy" in k and "val" not in k][0]
+    val_acc_key = [k for k in keys if "accuracy" in k and "val" in k][0]
+
+    # --- Accuracy de Clasificación ---
     plt.figure()
-    plt.plot(historial.history["accuracy"], label="Entrenamiento")
-    plt.plot(historial.history["val_accuracy"], label="Validación")
-    plt.title(f"Accuracy - {nombre_modelo}")
+    plt.plot(historial.history[acc_key], label="Entrenamiento")
+    plt.plot(historial.history[val_acc_key], label="Validación")
+    plt.title(f"Clasificación Accuracy - {nombre_modelo}")
     plt.xlabel("Época")
     plt.ylabel("Accuracy")
     plt.legend()
     plt.savefig(f"{carpeta_salida}/accuracy_{nombre_modelo}.png", bbox_inches="tight")
     plt.close()
 
-    # --- Loss ---
+    # --- Loss Total (Clasificación + Caja) ---
     plt.figure()
     plt.plot(historial.history["loss"], label="Entrenamiento")
     plt.plot(historial.history["val_loss"], label="Validación")
-    plt.title(f"Loss - {nombre_modelo}")
+    plt.title(f"Loss Total - {nombre_modelo}")
     plt.xlabel("Época")
     plt.ylabel("Loss")
     plt.legend()
@@ -54,7 +60,7 @@ def graficar_historial(historial, nombre_modelo, carpeta_salida="resultados"):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Entrena la CNN o el modelo MobileNetV2.")
+    parser = argparse.ArgumentParser(description="Entrena la CNN o el modelo MobileNetV2 para Detección.")
     parser.add_argument("--modelo", choices=["cnn", "mobilenet"], required=True,
                          help="Qué arquitectura entrenar.")
     parser.add_argument("--dataset_dir", default="dataset",
@@ -64,6 +70,7 @@ def main():
                          help="Solo aplica a --modelo mobilenet: habilita fine-tuning.")
     args = parser.parse_args()
 
+    # El cargador de datos modificado debe devolver: imagenes, (etiquetas_clase, coordenadas_caja)
     train_ds, val_ds, test_ds = cargar_datasets(args.dataset_dir)
 
     if args.modelo == "cnn":
@@ -73,16 +80,25 @@ def main():
         modelo = crear_mobilenet(fine_tune=args.fine_tune)
         nombre = "mobilenet"
 
-    # sparse_categorical_crossentropy porque las etiquetas vienen como
-    # enteros (0, 1, 2) y no como vectores one-hot.
+    # CONFIGURACIÓN PARA DETECCIÓN DE OBJETOS (Multi-salida)
+    # Se usan pérdidas independientes para la categoría de madurez y la regresión de la caja bounding box.
     modelo.compile(
         optimizer="adam",
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"],
+        loss={
+            "clase_output": "sparse_categorical_crossentropy",  # Madurez (0, 1, 2)
+            "caja_output": "mean_squared_error"                  # Coordenadas [xmin, ymin, xmax, ymax]
+        },
+        loss_weights={
+            "clase_output": 1.0,
+            "caja_output": 1.0
+        },
+        metrics={
+            "clase_output": ["accuracy"],
+            "caja_output": ["mae"]  # Error absoluto medio para evaluar la precisión del cuadro
+        }
     )
 
-    # EarlyStopping evita seguir entrenando (y sobreajustando) una vez
-    # que la pérdida de validación deja de mejorar.
+    # EarlyStopping evita seguir entrenando si la pérdida combinada total de validación deja de mejorar.
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
             monitor="val_loss", patience=5, restore_best_weights=True
@@ -103,9 +119,9 @@ def main():
 
     graficar_historial(historial, nombre)
 
-    # Evaluación rápida sobre el set de prueba, al final del entrenamiento.
-    test_loss, test_acc = modelo.evaluate(test_ds)
-    print(f"\nResultado en test -> loss: {test_loss:.4f}  accuracy: {test_acc:.4f}")
+    # Evaluación rápida sobre el set de prueba al final
+    evaluacion = modelo.evaluate(test_ds)
+    print(f"\nResultado en test -> Loss Total: {evaluacion[0]:.4f}")
 
 
 if __name__ == "__main__":
