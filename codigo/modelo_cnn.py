@@ -13,48 +13,45 @@ independientes.
 """
 
 import tensorflow as tf
-from tensorflow.keras import layers, models
+from tensorflow.keras import layers, models, regularizers
 
-from preparar_datos import crear_augmentation
-
-NUM_CLASES = 3
-
-
-def crear_cnn(usar_augmentation=True):
-    entradas = tf.keras.Input(shape=(224, 224, 3), name="imagen")
-    x = entradas
-
-    if usar_augmentation:
-        x = crear_augmentation()(x)
-
-    x = layers.Rescaling(1. / 255)(x)
-
-    # --- Tronco convolucional compartido ---
-    x = layers.Conv2D(32, (3, 3), activation="relu")(x)
-    x = layers.MaxPooling2D()(x)
-
-    x = layers.Conv2D(64, (3, 3), activation="relu")(x)
-    x = layers.MaxPooling2D()(x)
-
-    x = layers.Conv2D(128, (3, 3), activation="relu")(x)
-    x = layers.MaxPooling2D()(x)
-
+def crear_cnn(input_shape=(224, 224, 3), num_clases=3):
+    # Definimos la entrada del modelo
+    inputs = layers.Input(shape=input_shape)
+    
+    # --- Bloque Convolucional 1 ---
+    x = layers.Conv2D(32, (3, 3), activation='relu', padding='same',
+                      kernel_regularizer=regularizers.l2(0.001))(inputs)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.Dropout(0.2)(x)
+    
+    # --- Bloque Convolucional 2 ---
+    x = layers.Conv2D(64, (3, 3), activation='relu', padding='same',
+                      kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.Dropout(0.3)(x)
+    
+    # --- Bloque Convolucional 3 ---
+    x = layers.Conv2D(128, (3, 3), activation='relu', padding='same',
+                      kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPooling2D((2, 2))(x)
+    x = layers.Dropout(0.4)(x)
+    
+    # --- Capas Densas Aplanadas ---
     x = layers.Flatten()(x)
-    x = layers.Dense(128, activation="relu")(x)
-    x = layers.Dropout(0.3)(x)  # regularización obligatoria
-
-    # --- Cabeza de clasificación (madurez de la planta) ---
-    # 0 = avanzada, 1 = intermedia, 2 = temprana (orden de CLASES en preparar_datos.py)
-    clase_output = layers.Dense(NUM_CLASES, activation="softmax", name="clase_output")(x)
-
-    # --- Cabeza de regresión de caja (localización de la planta) ---
-    # sigmoid porque las coordenadas están normalizadas entre 0 y 1
-    caja_output = layers.Dense(4, activation="sigmoid", name="caja_output")(x)
-
-    modelo = models.Model(inputs=entradas, outputs=[clase_output, caja_output], name="cnn_deteccion")
+    x = layers.Dense(128, activation='relu', kernel_regularizer=regularizers.l2(0.001))(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.5)(x) # Dropout alto antes de las salidas para evitar memorización
+    
+    # --- SALIDAS DEL MODELO (Detección de Objetos Multi-salida) ---
+    # Asegúrate de mantener estos nombres idénticos para que coincidan con entrenar.py
+    clase_output = layers.Dense(num_clases, activation='softmax', name='clase_output')(x)
+    caja_output = layers.Dense(4, activation='sigmoid', name='caja_output')(x)
+    
+    modelo = models.Model(inputs=inputs, outputs=[clase_output, caja_output])
+    
+    print("¡Estructura CNN optimizada contra sobreajuste creada!")
     return modelo
-
-
-if __name__ == "__main__":
-    modelo = crear_cnn()
-    modelo.summary()
