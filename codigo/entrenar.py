@@ -15,6 +15,7 @@ Uso:
 import argparse
 import json
 import os
+import math
 
 import matplotlib.pyplot as plt
 import tensorflow as tf
@@ -70,8 +71,6 @@ def main():
                          help="Solo aplica a --modelo mobilenet: habilita fine-tuning.")
     args = parser.parse_args()
 
-    # cargar_datasets ahora devuelve, para cada elemento del dataset:
-    # (imagen, {"clase_output": etiqueta, "caja_output": [xmin,ymin,xmax,ymax]})
     train_ds, val_ds, test_ds = cargar_datasets(args.dataset_dir)
 
     if args.modelo == "cnn":
@@ -82,7 +81,6 @@ def main():
         nombre = "mobilenet"
 
     # CONFIGURACIÓN PARA DETECCIÓN DE OBJETOS (Multi-salida)
-    # Se usan pérdidas independientes para la categoría de madurez y la regresión de la caja bounding box.
     modelo.compile(
         optimizer="adam",
         loss={
@@ -99,31 +97,21 @@ def main():
         }
     )
 
-    # =================================================================
-    # NUEVO: ESTRATEGIAS DE GENERALIZACIÓN (Para el informe del profesor)
-    # =================================================================
-
-    # 1. EarlyStopping evita seguir entrenando si la pérdida de validación deja de mejorar.
+    # 1. EarlyStopping
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor="val_loss", patience=5, restore_best_weights=True
     )
     
-    # 2. Learning Rate Scheduler (Opcional según rúbrica)
-    # Reduce la velocidad de aprendizaje 10% cada época después de la época 10
+    # 2. Learning Rate Scheduler (Corrección Aplicada)
     def scheduler(epoch, lr):
         if epoch < 10:
-            return lr
+            return float(lr)
         else:
-            import math
             return float(lr * math.exp(-0.1))
-           
             
     lr_scheduler = tf.keras.callbacks.LearningRateScheduler(scheduler)
 
-    # Juntamos ambas estrategias
     callbacks = [early_stop, lr_scheduler]
-
-    # =================================================================
 
     historial = modelo.fit(
         train_ds,
