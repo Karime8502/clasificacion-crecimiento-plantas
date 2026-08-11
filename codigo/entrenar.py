@@ -99,12 +99,29 @@ def main():
         }
     )
 
-    # EarlyStopping evita seguir entrenando si la pérdida combinada total de validación deja de mejorar.
-    callbacks = [
-        tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=5, restore_best_weights=True
-        ),
-    ]
+    # =================================================================
+    # NUEVO: ESTRATEGIAS DE GENERALIZACIÓN (Para el informe del profesor)
+    # =================================================================
+
+    # 1. EarlyStopping evita seguir entrenando si la pérdida de validación deja de mejorar.
+    early_stop = tf.keras.callbacks.EarlyStopping(
+        monitor="val_loss", patience=5, restore_best_weights=True
+    )
+    
+    # 2. Learning Rate Scheduler (Opcional según rúbrica)
+    # Reduce la velocidad de aprendizaje 10% cada época después de la época 10
+    def scheduler(epoch, lr):
+        if epoch < 10:
+            return lr
+        else:
+            return lr * tf.math.exp(-0.1)
+            
+    lr_scheduler = tf.keras.callbacks.LearningRateScheduler(scheduler)
+
+    # Juntamos ambas estrategias
+    callbacks = [early_stop, lr_scheduler]
+
+    # =================================================================
 
     historial = modelo.fit(
         train_ds,
@@ -121,10 +138,6 @@ def main():
     graficar_historial(historial, nombre)
 
     # Evaluación rápida sobre el set de prueba al final.
-    # modelo.evaluate() con dos salidas devuelve una lista:
-    # [loss_total, loss_clase, loss_caja, accuracy_clase, mae_caja]
-    # El orden exacto depende de la versión de Keras, por eso lo
-    # imprimimos completo junto a modelo.metrics_names para leerlo bien.
     resultados = modelo.evaluate(test_ds)
     print("\nResultado en test:")
     for nombre_metrica, valor in zip(modelo.metrics_names, resultados):
