@@ -27,7 +27,7 @@ from modelo_mobilenet import crear_mobilenet
 def graficar_historial(historial, nombre_modelo, carpeta_salida="resultados"):
     os.makedirs(carpeta_salida, exist_ok=True)
 
-    # En detección multi-salida, Keras nombra las métricas combinando 
+    # En detección multi-salida, Keras nombra las métricas combinando
     # el nombre de la capa de salida. Buscamos las llaves dinámicamente.
     keys = historial.history.keys()
     acc_key = [k for k in keys if "accuracy" in k and "val" not in k][0]
@@ -64,13 +64,14 @@ def main():
     parser.add_argument("--modelo", choices=["cnn", "mobilenet"], required=True,
                          help="Qué arquitectura entrenar.")
     parser.add_argument("--dataset_dir", default="dataset",
-                         help="Carpeta con train/valid/test (exportada desde Roboflow).")
+                         help="Carpeta con train/valid/test (exportada desde Roboflow en formato CSV).")
     parser.add_argument("--epocas", type=int, default=20)
     parser.add_argument("--fine_tune", action="store_true",
                          help="Solo aplica a --modelo mobilenet: habilita fine-tuning.")
     args = parser.parse_args()
 
-    # El cargador de datos modificado debe devolver: imagenes, (etiquetas_clase, coordenadas_caja)
+    # cargar_datasets ahora devuelve, para cada elemento del dataset:
+    # (imagen, {"clase_output": etiqueta, "caja_output": [xmin,ymin,xmax,ymax]})
     train_ds, val_ds, test_ds = cargar_datasets(args.dataset_dir)
 
     if args.modelo == "cnn":
@@ -119,9 +120,15 @@ def main():
 
     graficar_historial(historial, nombre)
 
-    # Evaluación rápida sobre el set de prueba al final
-    evaluacion = modelo.evaluate(test_ds)
-    print(f"\nResultado en test -> Loss Total: {evaluacion[0]:.4f}")
+    # Evaluación rápida sobre el set de prueba al final.
+    # modelo.evaluate() con dos salidas devuelve una lista:
+    # [loss_total, loss_clase, loss_caja, accuracy_clase, mae_caja]
+    # El orden exacto depende de la versión de Keras, por eso lo
+    # imprimimos completo junto a modelo.metrics_names para leerlo bien.
+    resultados = modelo.evaluate(test_ds)
+    print("\nResultado en test:")
+    for nombre_metrica, valor in zip(modelo.metrics_names, resultados):
+        print(f"  {nombre_metrica}: {valor:.4f}")
 
 
 if __name__ == "__main__":

@@ -1,10 +1,17 @@
 """
-evaluar.py
-----------
-Evalúa un modelo ya entrenado (.keras) sobre el conjunto de prueba y
-calcula las métricas exigidas por el profesor para tareas de
-clasificación: Accuracy, Precision, Recall, F1-Score, ROC-AUC y
-matriz de confusión.
+evaluar.py  (versión DETECCIÓN DE OBJETOS)
+----------------------------------------------
+Evalúa un modelo multi-salida (clase_output + caja_output) sobre el
+conjunto de prueba.
+
+Para la CLASE calcula: Accuracy, Precision, Recall, F1-Score, matriz
+de confusión (las métricas que pide el profesor para clasificación).
+
+Para la CAJA calcula: IoU promedio (Intersection over Union), que es
+la métrica estándar para saber qué tan bien ubicada quedó la caja
+predicha frente a la real (las métricas de "Detección de Objetos"
+que pide el profesor: IoU, además de Precision/Recall que ya se
+calculan sobre la clase).
 
 Uso:
     python evaluar.py --modelo modelos/modelo_mobilenet.keras --dataset_dir dataset
@@ -16,69 +23,90 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    ConfusionMatrixDisplay,
-    roc_auc_score,
-)
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
 
-from preparar_datos import cargar_datasets
+from preparar_datos import cargar_datasets, CLASES
+
+
+def calcular_iou(caja_real, caja_predicha):
+    """
+    IoU (Intersection over Union) entre dos cajas [xmin, ymin, xmax, ymax]
+    normalizadas. 1.0 = coinciden perfectamente, 0.0 = no se tocan.
+    """
+    xmin_inter = np.maximum(caja_real[:, 0], caja_predicha[:, 0])
+    ymin_inter = np.maximum(caja_real[:, 1], caja_predicha[:, 1])
+    xmax_inter = np.minimum(caja_real[:, 2], caja_predicha[:, 2])
+    ymax_inter = np.minimum(caja_real[:, 3], caja_predicha[:, 3])
+
+    ancho_inter = np.maximum(0, xmax_inter - xmin_inter)
+    alto_inter = np.maximum(0, ymax_inter - ymin_inter)
+    area_inter = ancho_inter * alto_inter
+
+    area_real = (caja_real[:, 2] - caja_real[:, 0]) * (caja_real[:, 3] - caja_real[:, 1])
+    area_pred = (caja_predicha[:, 2] - caja_predicha[:, 0]) * (caja_predicha[:, 3] - caja_predicha[:, 1])
+
+    area_union = area_real + area_pred - area_inter
+    iou = np.where(area_union > 0, area_inter / area_union, 0.0)
+    return iou
 
 
 def evaluar_modelo(ruta_modelo, dataset_dir="dataset", carpeta_salida="resultados"):
     os.makedirs(carpeta_salida, exist_ok=True)
 
     _, _, test_ds = cargar_datasets(dataset_dir)
-    nombres_clases = test_ds.class_names
-
     modelo = tf.keras.models.load_model(ruta_modelo)
 
-    y_true = []
-    y_pred_probs = []
+    y_true, y_pred = [], []
+    cajas_true, cajas_pred = [], []
 
     for imagenes, etiquetas in test_ds:
-        probs = modelo.predict(imagenes, verbose=0)
-        y_pred_probs.append(probs)
-        y_true.append(etiquetas.numpy())
+        clase_pred, caja_pred = modelo.predict(imagenes, verbose=0)
+
+        y_true.append(etiquetas["clase_output"].numpy())
+        y_pred.append(np.argmax(clase_pred, axis=1))
+
+        cajas_true.append(etiquetas["caja_output"].numpy())
+        cajas_pred.append(caja_pred)
 
     y_true = np.concatenate(y_true)
-    y_pred_probs = np.concatenate(y_pred_probs)
-    y_pred = np.argmax(y_pred_probs, axis=1)
+    y_pred = np.concatenate(y_pred)
+    cajas_true = np.concatenate(cajas_true)
+    cajas_pred = np.concatenate(cajas_pred)
 
-    print("\n=== Reporte de clasificación (accuracy, precision, recall, F1) ===")
-    reporte = classification_report(y_true, y_pred, target_names=nombres_clases)
+    # --- Métricas de clasificación (madurez) ---
+    print("\n=== Reporte de clasificación (Accuracy, Precision, Recall, F1) ===")
+    reporte = classification_report(y_true, y_pred, target_names=CLASES)
     print(reporte)
 
-    # ROC-AUC multiclase (one-vs-rest), útil cuando las clases no son binarias.
-    try:
-        auc = roc_auc_score(y_true, y_pred_probs, multi_class="ovr")
-        print(f"ROC-AUC (one-vs-rest): {auc:.4f}")
-    except ValueError as e:
-        auc = None
-        print(f"No se pudo calcular ROC-AUC: {e}")
-
-    # --- Matriz de confusión ---
     matriz = confusion_matrix(y_true, y_pred)
-    disp = ConfusionMatrixDisplay(confusion_matrix=matriz, display_labels=nombres_clases)
+    disp = ConfusionMatrixDisplay(confusion_matrix=matriz, display_labels=CLASES)
     disp.plot(cmap="Blues", values_format="d")
-    plt.title("Matriz de confusión")
-    ruta_matriz = f"{carpeta_salida}/matriz_confusion.png"
-    plt.savefig(ruta_matriz, bbox_inches="tight")
+    plt.title("Matriz de confusión - clase de madurez")
+    plt.savefig(f"{carpeta_salida}/matriz_confusion.png", bbox_inches="tight")
     plt.close()
-    print(f"\nMatriz de confusión guardada en {ruta_matriz}")
 
-    # Guardar el reporte de texto también, para anexarlo al informe.
+    # --- Métricas de detección (ubicación de la planta) ---
+    iou_por_imagen = calcular_iou(cajas_true, cajas_pred)
+    iou_promedio = float(np.mean(iou_por_imagen))
+    # Porcentaje de cajas "aceptables": IoU >= 0.5 es el umbral estándar
+    # usado en la literatura de detección de objetos.
+    porcentaje_iou_50 = float(np.mean(iou_por_imagen >= 0.5)) * 100
+
+    print(f"\n=== Métricas de localización (caja) ===")
+    print(f"IoU promedio: {iou_promedio:.4f}")
+    print(f"% de cajas con IoU >= 0.5: {porcentaje_iou_50:.1f}%")
+
     with open(f"{carpeta_salida}/reporte_clasificacion.txt", "w") as f:
         f.write(reporte)
-        if auc is not None:
-            f.write(f"\nROC-AUC (one-vs-rest): {auc:.4f}\n")
+        f.write(f"\nIoU promedio: {iou_promedio:.4f}\n")
+        f.write(f"% de cajas con IoU >= 0.5: {porcentaje_iou_50:.1f}%\n")
 
-    return reporte, matriz, auc
+    print(f"\nResultados guardados en {carpeta_salida}/")
+    return reporte, matriz, iou_promedio
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evalúa un modelo entrenado.")
+    parser = argparse.ArgumentParser(description="Evalúa un modelo de detección entrenado.")
     parser.add_argument("--modelo", required=True, help="Ruta al archivo .keras")
     parser.add_argument("--dataset_dir", default="dataset")
     args = parser.parse_args()
