@@ -56,20 +56,19 @@ def evaluar_modelo(ruta_modelo, dataset_dir="dataset", carpeta_salida="resultado
 
     _, _, test_ds = cargar_datasets(dataset_dir)
 
-    #  CÓDIGO CORREGIDO PARA REEMPLAZAR:
-import os
+    # --- INICIO BLOQUE CON ESPACIOS CORREGIDOS ---
+    # Si el usuario pasó solo 'cnn' o 'mobilenet', construimos la ruta real al archivo .keras
+    if ruta_modelo in ["cnn", "mobilenet"]:
+        nombre_corto = ruta_modelo
+        ruta_modelo = f"modelos/modelo_{nombre_corto}.keras"
+        
+        # Si estás ejecutando dentro de la subcarpeta /codigo, buscamos un nivel atrás
+        if not os.path.exists(ruta_modelo):
+            ruta_modelo = f"../modelos/modelo_{nombre_corto}.keras"
 
-# Si el usuario pasó solo 'cnn' o 'mobilenet', construimos la ruta real al archivo .keras
-if ruta_modelo in ["cnn", "mobilenet"]:
-    nombre_corto = ruta_modelo
-    ruta_modelo = f"modelos/modelo_{nombre_corto}.keras"
-    
-    # Si estás ejecutando dentro de la subcarpeta /codigo, buscamos un nivel atrás
-    if not os.path.exists(ruta_modelo):
-        ruta_modelo = f"../modelos/modelo_{nombre_corto}.keras"
-
-print(f"Cargando de forma segura el archivo del modelo desde: {ruta_modelo}")
-modelo = tf.keras.models.load_model(ruta_modelo)
+    print(f"Cargando de forma segura el archivo del modelo desde: {ruta_modelo}")
+    modelo = tf.keras.models.load_model(ruta_modelo)
+    # --- FIN BLOQUE CON ESPACIOS CORREGIDOS ---
 
     y_true, y_pred = [], []
     cajas_true, cajas_pred = [], []
@@ -103,6 +102,7 @@ modelo = tf.keras.models.load_model(ruta_modelo)
     # --- Métricas de detección (ubicación de la planta) ---
     iou_por_imagen = calcular_iou(cajas_true, cajas_pred)
     iou_promedio = float(np.mean(iou_por_imagen))
+    
     # Porcentaje de cajas "aceptables": IoU >= 0.5 es el umbral estándar
     # usado en la literatura de detección de objetos.
     porcentaje_iou_50 = float(np.mean(iou_por_imagen >= 0.5)) * 100
