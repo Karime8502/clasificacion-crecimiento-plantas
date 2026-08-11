@@ -55,7 +55,21 @@ def evaluar_modelo(ruta_modelo, dataset_dir="dataset", carpeta_salida="resultado
     os.makedirs(carpeta_salida, exist_ok=True)
 
     _, _, test_ds = cargar_datasets(dataset_dir)
-    modelo = tf.keras.models.load_model(ruta_modelo)
+
+    #  CÓDIGO CORREGIDO PARA REEMPLAZAR:
+import os
+
+# Si el usuario pasó solo 'cnn' o 'mobilenet', construimos la ruta real al archivo .keras
+if ruta_modelo in ["cnn", "mobilenet"]:
+    nombre_corto = ruta_modelo
+    ruta_modelo = f"modelos/modelo_{nombre_corto}.keras"
+    
+    # Si estás ejecutando dentro de la subcarpeta /codigo, buscamos un nivel atrás
+    if not os.path.exists(ruta_modelo):
+        ruta_modelo = f"../modelos/modelo_{nombre_corto}.keras"
+
+print(f"Cargando de forma segura el archivo del modelo desde: {ruta_modelo}")
+modelo = tf.keras.models.load_model(ruta_modelo)
 
     y_true, y_pred = [], []
     cajas_true, cajas_pred = [], []
