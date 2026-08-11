@@ -114,7 +114,9 @@ def main():
         if epoch < 10:
             return lr
         else:
-            return lr * tf.math.exp(-0.1)
+            import math
+            return float(lr * math.exp(-0.1))
+           
             
     lr_scheduler = tf.keras.callbacks.LearningRateScheduler(scheduler)
 
