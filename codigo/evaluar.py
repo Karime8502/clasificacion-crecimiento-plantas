@@ -25,7 +25,8 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
 
-from preparar_datos import cargar_datasets, CLASES
+import preparar_datos
+from preparar_datos import cargar_datasets
 
 
 def calcular_iou(caja_real, caja_predicha):
@@ -75,11 +76,11 @@ def evaluar_modelo(ruta_modelo, dataset_dir="dataset", carpeta_salida="resultado
 
     # --- Métricas de clasificación (madurez) ---
     print("\n=== Reporte de clasificación (Accuracy, Precision, Recall, F1) ===")
-    reporte = classification_report(y_true, y_pred, target_names=CLASES)
+    reporte = classification_report(y_true, y_pred, target_names=preparar_datos.CLASES)
     print(reporte)
 
     matriz = confusion_matrix(y_true, y_pred)
-    disp = ConfusionMatrixDisplay(confusion_matrix=matriz, display_labels=CLASES)
+    disp = ConfusionMatrixDisplay(confusion_matrix=matriz, display_labels=preparar_datos.CLASES)
     disp.plot(cmap="Blues", values_format="d")
     plt.title("Matriz de confusión - clase de madurez")
     plt.savefig(f"{carpeta_salida}/matriz_confusion.png", bbox_inches="tight")

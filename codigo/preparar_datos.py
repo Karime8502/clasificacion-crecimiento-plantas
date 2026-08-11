@@ -1,95 +1,111 @@
 """
-preparar_datos.py  (versión DETECCIÓN DE OBJETOS)
-----------------------------------------------------
+preparar_datos.py  (versión DETECCIÓN DE OBJETOS — formato YOLO)
+--------------------------------------------------------------------
 Carga imágenes + su caja delimitadora (bounding box) + su clase de
 madurez, a partir de un dataset exportado de Roboflow en formato
-"CSV" (una fila por imagen, porque cada foto tiene UNA sola planta).
+YOLO (un .txt por imagen).
 
-Estructura esperada (la que genera Roboflow al exportar en CSV):
+Estructura esperada (la que ya tienen en Drive):
 
 dataset/
+├── data.yaml
 ├── train/
-│   ├── _annotations.csv
-│   ├── foto1.jpg
-│   ├── foto2.jpg
-│   └── ...
+│   ├── images/
+│   │   ├── foto1.jpg
+│   │   └── ...
+│   └── labels/
+│       ├── foto1.txt
+│       └── ...
 ├── valid/
-│   ├── _annotations.csv
-│   └── ...
+│   ├── images/
+│   └── labels/
 └── test/
-    ├── _annotations.csv
-    └── ...
+    ├── images/
+    └── labels/
 
-Columnas esperadas en _annotations.csv:
-    filename, width, height, class, xmin, ymin, xmax, ymax
+Cada .txt tiene una línea por objeto (aquí siempre una sola, porque
+cada foto tiene una sola planta):
+    clase_id  x_centro  y_centro  ancho  alto
+todo normalizado entre 0 y 1 respecto al tamaño de la imagen.
+
+El orden de las clases (qué número es cada nombre) se lee del
+data.yaml, en la llave "names".
 """
 
 import os
 
-import pandas as pd
 import tensorflow as tf
+import yaml
 
 IMG_SIZE = (224, 224)
 BATCH_SIZE = 16
 
-# Orden fijo de clases (debe coincidir con cómo se compilan las
-# métricas en entrenar.py y evaluar.py). Ajustar si en Roboflow
-# quedaron con otro nombre exacto.
+# Valor de respaldo; se sobreescribe de verdad al llamar cargar_datasets(),
+# que lee el orden real desde dataset/data.yaml.
 CLASES = ["avanzada", "intermedia", "temprana"]
-CLASE_A_INDICE = {nombre: i for i, nombre in enumerate(CLASES)}
+
+
+def _leer_nombres_clases(dataset_dir):
+    ruta_yaml = os.path.join(dataset_dir, "data.yaml")
+    if not os.path.exists(ruta_yaml):
+        raise FileNotFoundError(f"No se encontró {ruta_yaml}.")
+    with open(ruta_yaml, "r") as f:
+        data = yaml.safe_load(f)
+    return data["names"]
 
 
 def _leer_split(dataset_dir, split):
-    """
-    Lee el CSV de un split (train/valid/test) y arma listas paralelas
-    de: rutas de imagen, etiqueta de clase (entero) y caja normalizada
-    [xmin, ymin, xmax, ymax] en rango [0, 1] (relativa al ancho/alto
-    original de cada imagen).
-    """
-    carpeta = os.path.join(dataset_dir, split)
-    ruta_csv = os.path.join(carpeta, "_annotations.csv")
+    carpeta_imagenes = os.path.join(dataset_dir, split, "images")
+    carpeta_labels = os.path.join(dataset_dir, split, "labels")
 
-    if not os.path.exists(ruta_csv):
-        raise FileNotFoundError(
-            f"No se encontró {ruta_csv}. Verifiquen que exportaron el "
-            f"dataset desde Roboflow en formato 'CSV' (no YOLO/COCO)."
-        )
-
-    df = pd.read_csv(ruta_csv)
-
-    # Algunas exportaciones de Roboflow usan mayúsculas o nombres
-    # ligeramente distintos; normalizamos por si acaso.
-    df.columns = [c.strip().lower() for c in df.columns]
+    if not os.path.isdir(carpeta_imagenes):
+        raise FileNotFoundError(f"No se encontró la carpeta {carpeta_imagenes}")
 
     rutas, etiquetas, cajas = [], [], []
 
-    for _, fila in df.iterrows():
-        nombre_clase = str(fila["class"]).strip().lower()
-        if nombre_clase not in CLASE_A_INDICE:
-            print(f"Aviso: clase desconocida '{nombre_clase}' en {fila['filename']}, se omite.")
+    for nombre_archivo in sorted(os.listdir(carpeta_imagenes)):
+        if not nombre_archivo.lower().endswith((".jpg", ".jpeg", ".png")):
             continue
 
-        ruta_imagen = os.path.join(carpeta, fila["filename"])
-        if not os.path.exists(ruta_imagen):
-            print(f"Aviso: no se encontró la imagen {ruta_imagen}, se omite.")
+        nombre_base, _ = os.path.splitext(nombre_archivo)
+        ruta_label = os.path.join(carpeta_labels, nombre_base + ".txt")
+
+        if not os.path.exists(ruta_label):
+            print(f"Aviso: sin etiqueta para {nombre_archivo}, se omite.")
             continue
 
-        ancho = float(fila["width"])
-        alto = float(fila["height"])
+        with open(ruta_label, "r") as f:
+            lineas = [l.strip() for l in f if l.strip()]
 
-        # Normalizamos la caja a [0, 1] para que no dependa de la
-        # resolución original de cada foto (pueden venir de cámara y
-        # celular con tamaños distintos).
-        caja_normalizada = [
-            float(fila["xmin"]) / ancho,
-            float(fila["ymin"]) / alto,
-            float(fila["xmax"]) / ancho,
-            float(fila["ymax"]) / alto,
-        ]
+        if not lineas:
+            print(f"Aviso: {ruta_label} está vacío, se omite.")
+            continue
 
-        rutas.append(ruta_imagen)
-        etiquetas.append(CLASE_A_INDICE[nombre_clase])
-        cajas.append(caja_normalizada)
+        # Cada foto tiene una sola planta -> se toma solo la primera línea.
+        valores = lineas[0].split()
+        clase_id = int(valores[0])
+        coords = list(map(float, valores[1:]))
+
+        if len(coords) == 4:
+            # Formato bounding box simple: x_centro, y_centro, ancho, alto
+            x_c, y_c, ancho, alto = coords
+            xmin = x_c - ancho / 2
+            ymin = y_c - alto / 2
+            xmax = x_c + ancho / 2
+            ymax = y_c + alto / 2
+        else:
+            # Formato polígono (segmentación): pares x1,y1, x2,y2, ...
+            # (así quedó exportado porque en Roboflow se etiquetó con
+            # la herramienta de contorno/polígono, no de caja).
+            # Se calcula la caja rectangular que envuelve el polígono.
+            xs = coords[0::2]
+            ys = coords[1::2]
+            xmin, xmax = min(xs), max(xs)
+            ymin, ymax = min(ys), max(ys)
+
+        rutas.append(os.path.join(carpeta_imagenes, nombre_archivo))
+        etiquetas.append(clase_id)
+        cajas.append([xmin, ymin, xmax, ymax])
 
     return rutas, etiquetas, cajas
 
@@ -114,17 +130,15 @@ def _construir_dataset(rutas, etiquetas, cajas, entrenamiento=False):
 
 
 def cargar_datasets(dataset_dir="dataset"):
-    """
-    Retorna train_dataset, validation_dataset, test_dataset listos
-    para .fit()/.evaluate(), cada elemento con forma:
-        (imagen, {"clase_output": etiqueta, "caja_output": [xmin,ymin,xmax,ymax]})
-    """
+    global CLASES
+    CLASES = _leer_nombres_clases(dataset_dir)
+
     train_rutas, train_y, train_boxes = _leer_split(dataset_dir, "train")
     val_rutas, val_y, val_boxes = _leer_split(dataset_dir, "valid")
     test_rutas, test_y, test_boxes = _leer_split(dataset_dir, "test")
 
     print(f"Imágenes -> train: {len(train_rutas)}  valid: {len(val_rutas)}  test: {len(test_rutas)}")
-    print("Clases:", CLASES)
+    print("Clases (orden del data.yaml):", CLASES)
 
     train_dataset = _construir_dataset(train_rutas, train_y, train_boxes, entrenamiento=True)
     validation_dataset = _construir_dataset(val_rutas, val_y, val_boxes)
@@ -136,13 +150,8 @@ def cargar_datasets(dataset_dir="dataset"):
 def crear_augmentation():
     """
     Data Augmentation SOLO sobre color (brillo, contraste). No se
-    aplican transformaciones geométricas (rotación, volteo, zoom)
-    porque estas moverían la planta dentro de la imagen y dejarían
-    la caja delimitadora (xmin,ymin,xmax,ymax) desactualizada frente
-    a la posición real de la planta, salvo que también se recalculen
-    las coordenadas de la caja en cada transformación (no implementado
-    aquí por simplicidad). Si más adelante quieren agregar rotación,
-    avísenme y lo hacemos con las coordenadas de la caja incluidas.
+    aplican transformaciones geométricas porque moverían la caja
+    delimitadora fuera de su posición real.
     """
     return tf.keras.Sequential([
         tf.keras.layers.RandomBrightness(0.15),

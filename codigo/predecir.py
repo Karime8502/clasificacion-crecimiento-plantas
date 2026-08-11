@@ -3,8 +3,8 @@ predecir.py  (versión DETECCIÓN DE OBJETOS)
 ------------------------------------------------
 Carga un modelo entrenado y, para UNA imagen nueva:
   1. dice en qué etapa de madurez está la planta,
-  2. dibuja la caja delimitadora que el modelo predijo alrededor de
-     la planta, y guarda la imagen con la caja dibujada.
+  2. dibuja la caja delimitadora predicha alrededor de la planta y
+     guarda la imagen resultante.
 
 Uso:
     python predecir.py --modelo modelos/modelo_mobilenet.keras --imagen planta.jpg
@@ -15,13 +15,27 @@ import os
 
 import numpy as np
 import tensorflow as tf
-from PIL import Image, ImageDraw, ImageFont
+import yaml
+from PIL import Image, ImageDraw
 
 IMG_SIZE = (224, 224)
-CLASES = ["avanzada", "intermedia", "temprana"]  # mismo orden que preparar_datos.py
+CLASES_POR_DEFECTO = ["avanzada", "intermedia", "temprana"]
 
 
-def predecir_imagen(ruta_modelo, ruta_imagen, carpeta_salida="resultados"):
+def _obtener_clases(dataset_dir=None):
+    if dataset_dir is None:
+        return CLASES_POR_DEFECTO
+    ruta_yaml = os.path.join(dataset_dir, "data.yaml")
+    if not os.path.exists(ruta_yaml):
+        print(f"Aviso: no se encontró {ruta_yaml}, usando orden por defecto.")
+        return CLASES_POR_DEFECTO
+    with open(ruta_yaml, "r") as f:
+        data = yaml.safe_load(f)
+    return data["names"]
+
+
+def predecir_imagen(ruta_modelo, ruta_imagen, dataset_dir=None, carpeta_salida="resultados"):
+    clases = _obtener_clases(dataset_dir)
     modelo = tf.keras.models.load_model(ruta_modelo)
 
     imagen_original = Image.open(ruta_imagen).convert("RGB")
@@ -34,16 +48,15 @@ def predecir_imagen(ruta_modelo, ruta_imagen, carpeta_salida="resultados"):
     caja_pred = caja_pred[0]  # [xmin, ymin, xmax, ymax] normalizados 0-1
 
     indice_predicho = int(np.argmax(clase_probs))
-    etapa = CLASES[indice_predicho]
+    etapa = clases[indice_predicho]
 
     print("Resultado:")
     print(f"Etapa: {etapa.upper()}")
     print("Probabilidades:")
-    for clase, prob in zip(CLASES, clase_probs):
+    for clase, prob in zip(clases, clase_probs):
         print(f"  {clase.capitalize()}: {prob:.2f}")
     print(f"Caja (normalizada): {caja_pred}")
 
-    # --- Dibujar la caja sobre la imagen ORIGINAL (no la redimensionada) ---
     ancho_orig, alto_orig = imagen_original.size
     xmin = caja_pred[0] * ancho_orig
     ymin = caja_pred[1] * alto_orig
@@ -67,6 +80,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Predice etapa y ubicación de la planta en una imagen.")
     parser.add_argument("--modelo", required=True, help="Ruta al archivo .keras")
     parser.add_argument("--imagen", required=True, help="Ruta a la imagen a analizar")
+    parser.add_argument("--dataset_dir", default=None,
+                         help="Carpeta del dataset (para leer el orden real de clases desde data.yaml)")
     args = parser.parse_args()
 
-    predecir_imagen(args.modelo, args.imagen)
+    predecir_imagen(args.modelo, args.imagen, dataset_dir=args.dataset_dir)
